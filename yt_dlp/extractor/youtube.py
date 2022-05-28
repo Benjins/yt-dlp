@@ -2742,6 +2742,40 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
         last_chapter['end_time'] = duration
         return chapters
 
+    def _extract_heatmap_from_json(self, data):
+        markers_map = traverse_obj(
+            data, (
+                'playerOverlays', 'playerOverlayRenderer', 'decoratedPlayerBarRenderer',
+                'decoratedPlayerBarRenderer', 'playerBar', 'multiMarkersPlayerBarRenderer', 'markersMap'
+            ), expected_type=list)
+
+        if markers_map is None:
+            return None
+
+        heat_seeker = None
+        for marker in markers_map:
+            if marker['key'] == 'HEATSEEKER':
+                heat_seeker = marker['value']
+                break
+
+        if heat_seeker is None:
+            return None
+
+        heat_markers = traverse_obj(heat_seeker, ('heatmap', 'heatmapRenderer', 'heatMarkers'), expected_type=list)
+        return self._extract_heatmap(heat_markers)
+
+    def _extract_heatmap(self, heat_markers):
+        heat_map = []
+        for heat_marker in heat_markers:
+            start_seconds = float_or_none(traverse_obj(heat_marker, ('heatMarkerRenderer', 'timeRangeStartMillis')), scale=1000)
+            duration_seconds = float_or_none(traverse_obj(heat_marker, ('heatMarkerRenderer', 'markerDurationMillis')), scale=1000)
+            intensity_normalized = float_or_none(traverse_obj(heat_marker, ('heatMarkerRenderer', 'heatMarkerIntensityScoreNormalized')))
+
+            heat_map_segment = {'start': start_seconds, 'duration': duration_seconds, 'normalized_intensity': intensity_normalized}
+            heat_map.append(heat_map_segment)
+
+        return heat_map
+
     def _extract_yt_initial_variable(self, webpage, regex, video_id, name):
         return self._parse_json(self._search_regex(
             (fr'{regex}\s*{self._YT_INITIAL_BOUNDARY_RE}',
@@ -3670,6 +3704,8 @@ class YoutubeIE(YoutubeBaseInfoExtractor):
                 self._extract_chapters_from_json(initial_data, duration)
                 or self._extract_chapters_from_engagement_panel(initial_data, duration)
                 or None)
+
+            info['heatmap'] = self._extract_heatmap_from_json(initial_data)
 
         contents = traverse_obj(
             initial_data, ('contents', 'twoColumnWatchNextResults', 'results', 'results', 'contents'),
